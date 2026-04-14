@@ -1,5 +1,5 @@
 <h1>
-!!! THIS EXTENSION WILL BE DEPRECATED SOON !!!
+!!! THIS EXTENSION PACK WILL BE DEPRECATED SOON !!!
 <hr/>
 Please check out <a href="https://kaoto.io">Kaoto</a>.
  <br/><br/><br/>
