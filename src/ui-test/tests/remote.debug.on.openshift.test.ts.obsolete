@@ -16,7 +16,7 @@
  */
 import { assert } from 'chai';
 import * as path from 'path';
-import { ActivityBar, BottomBarPanel, Breakpoint, DebugView, EditorView, InputBox, SideBarView, TextEditor, VSBrowser, WebDriver } from "vscode-extension-tester";
+import { ActivityBar, BottomBarPanel, Breakpoint, DebugView, EditorView, InputBox, TextEditor, VSBrowser, WebDriver } from "vscode-extension-tester";
 import { addNewItemToRawJson, clearTerminal, deleteFolderContents, disconnectDebugger, executeCommand, killTerminal, waitUntilEditorIsOpened, waitUntilTerminalHasText } from '../utils';
 import { DEMO_FILE, QUARKUS_ATTACH_DEBUGGER, QUARKUS_CREATE_COMMAND, QUARKUS_DIR, QUARKUS_PROJECT_FOLDER, SPRINGBOOT_ATTACH_DEBUGGER, SPRINGBOOT_CREATE_COMMAND, SPRINGBOOT_DIR, SPRINGBOOT_PROJECT_FOLDER } from '../variables';
 
@@ -30,7 +30,7 @@ describe('Remote debug on OpenShift', function () {
     describe('Spring Boot project', function () {
 
         before(async function () {
-            await prepareEnvironment('springboot', SPRINGBOOT_DIR);
+            await prepareEnvironment(SPRINGBOOT_DIR);
         });
 
         after(async function () {
@@ -70,7 +70,7 @@ describe('Remote debug on OpenShift', function () {
     describe('Quarkus project', function () {
 
         before(async function () {
-            await prepareEnvironment('quarkus', QUARKUS_DIR);
+            await prepareEnvironment(QUARKUS_DIR);
         });
 
         after(async function () {
@@ -113,12 +113,11 @@ describe('Remote debug on OpenShift', function () {
      * @param directory - The name of the directory to be opened in the Explorer view.
      * @param directoryPath - The path of the directory to be cleared and opened in the Explorer view.
      */
-    async function prepareEnvironment(directory: string, directoryPath: string): Promise<void> {
+    async function prepareEnvironment(directoryPath: string): Promise<void> {
         await deleteFolderContents(directoryPath);
         driver = VSBrowser.instance.driver
         await VSBrowser.instance.openResources(directoryPath);
         await (await new ActivityBar().getViewControl('Explorer'))?.openView();
-        await new SideBarView().getContent().getSection(directory);
         await workaround(driver);
     }
 
@@ -148,15 +147,18 @@ async function workaround(driver: WebDriver): Promise<void> {
     await waitUntilEditorIsOpened(driver, 'settings.json');
     const editor = new TextEditor();
     const newJson = addNewItemToRawJson(await editor.getText(), "java.project.sourcePaths", ["src/main/java"]);
+    const normalizedNewJson = newJson.replace(/\s+/g, '');
     await editor.setText(newJson);
     await driver.wait(async () => {
-        return await editor.isDirty() && (await editor.getText()).replace(/\s+/g, '') === newJson.replace(/\s+/g, '');
+        return (await editor.getText()).replace(/\s+/g, '') === normalizedNewJson;
     }, 10000);
-    await editor.save();
-    await driver.wait(async () => {
-        return !await editor.isDirty();
-    }, 10000);
-    await new EditorView().closeEditor("settings.json");
+    if (await editor.isDirty()) {
+        await editor.save();
+        await driver.wait(async () => {
+            return !await editor.isDirty();
+        }, 10000);
+    }
+    await new EditorView().closeAllEditors();
 }
 
 /**
