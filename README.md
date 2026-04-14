@@ -1,3 +1,10 @@
+<h1>
+!!! THIS EXTENSION WILL BE DEPRECATED SOON !!!
+<hr/>
+Please check out <a href="https://kaoto.io">Kaoto</a>.
+ <br/><br/><br/>
+</h1>
+
 <h1 align="center">
   <img width="125" height="125" src="https://raw.githubusercontent.com/camel-tooling/vscode-camel-extension-pack/main/icons/icon128.png">
   <br>
