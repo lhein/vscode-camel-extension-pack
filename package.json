@@ -59,9 +59,11 @@
 		"@types/chai": "^5.2.2",
 		"@types/fs-extra": "^11.0.4",
 		"@types/mocha": "^10.0.10",
+		"@types/node": "^25.6.0",
 		"chai": "^6.2.2",
 		"glob": "^11.0.3",
 		"mocha": "^11.7.5",
+		"typescript": "^5.9.3",
 		"vscode-extension-tester": "^8.23.0"
 	}
 }
