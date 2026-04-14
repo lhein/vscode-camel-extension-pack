@@ -15,9 +15,185 @@
  * limitations under the License.
  */
 import * as path from 'path';
-import { ActivityBar, BottomBarPanel, By, DebugToolbar, EditorView, error, ExtensionsViewItem, ExtensionsViewSection, InputBox, TextEditor, until, VSBrowser, WebDriver, Workbench } from 'vscode-extension-tester';
+import { ActivityBar, BottomBarPanel, By, DebugToolbar, EditorView, error, ExtensionsViewItem, ExtensionsViewSection, InputBox, ModalDialog, TextEditor, until, VSBrowser, WebDriver, Workbench } from 'vscode-extension-tester';
 import * as fs from 'fs-extra';
 import { DEBUGGER_ATTACHED_MESSAGE } from './variables';
+
+function normalizeExtensionTitle(title: string): string {
+    return title
+        .replaceAll(/\(\s*preview\s*\)/gi, '')
+        .replaceAll(/\[\s*preview\s*\]/gi, '')
+        .replaceAll(/\bpreview\b/gi, '')
+        .replaceAll(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function matchesExtensionTitle(actualTitle: string, expectedTitle: string): boolean {
+    const normalizedActualTitle = normalizeExtensionTitle(actualTitle);
+    const normalizedExpectedTitle = normalizeExtensionTitle(expectedTitle);
+    return normalizedActualTitle === normalizedExpectedTitle;
+}
+
+async function findVisibleMatchingExtensionItem(section: ExtensionsViewSection, searchTerms: string[]): Promise<ExtensionsViewItem | undefined> {
+    const visibleItems = await section.getVisibleItems();
+    for (const visibleItem of visibleItems) {
+        const title = await visibleItem.getTitle();
+        if (searchTerms.some(candidate => matchesExtensionTitle(title, candidate))) {
+            return visibleItem;
+        }
+    }
+    return undefined;
+}
+
+async function getExtensionsSection(content: any, title: string): Promise<ExtensionsViewSection | undefined> {
+    return await content.getSection(title, ExtensionsViewSection).catch(() => undefined);
+}
+
+async function findMatchingExtensionItemInSections(sections: ExtensionsViewSection[], searchTerms: string[]): Promise<ExtensionsViewItem | undefined> {
+    for (const section of sections) {
+        const item = await findVisibleMatchingExtensionItem(section, searchTerms);
+        if (item) {
+            return item;
+        }
+    }
+    return undefined;
+}
+
+async function findMatchingExtensionItemBySearch(section: ExtensionsViewSection | undefined, prefix: '@installed' | '@enabled', searchTerms: string[]): Promise<ExtensionsViewItem | undefined> {
+    if (!section) {
+        return undefined;
+    }
+
+    for (const searchTerm of searchTerms) {
+        const item = await section.findItem(`${prefix} ${searchTerm}`);
+        if (item) {
+            return item;
+        }
+    }
+
+    return undefined;
+}
+
+function getPreferredExtensionSearchTerms(name: string | string[]): string[] {
+    if (!Array.isArray(name)) {
+        return [name];
+    }
+    const preferredSearchTerm = name.at(-1);
+    return preferredSearchTerm ? [preferredSearchTerm] : [];
+}
+
+function isExpectedUiAbsenceError(err: unknown): boolean {
+    return err instanceof error.TimeoutError || err instanceof error.NoSuchElementError;
+}
+
+function isExpectedUiInteractionError(err: unknown): boolean {
+    return isExpectedUiAbsenceError(err) || err instanceof error.ElementClickInterceptedError;
+}
+
+async function getModalDialog(driver: WebDriver): Promise<ModalDialog | undefined> {
+    const dialogs = await driver.findElements(By.className('monaco-dialog-box'));
+    return dialogs.length > 0 ? new ModalDialog() : undefined;
+}
+
+export async function dismissModalDialogIfPresent(driver: WebDriver): Promise<void> {
+    const dialog = await getModalDialog(driver);
+    if (!dialog) {
+        return;
+    }
+
+    let closeAttempted = false;
+    try {
+        await dialog.close();
+        closeAttempted = true;
+    } catch (err) {
+        if (!isExpectedUiInteractionError(err) && !(err instanceof error.StaleElementReferenceError)) {
+            throw err;
+        }
+    }
+
+    if (!closeAttempted) {
+        const dismissButtonTitles = new Set(['Cancel', 'No', 'Not Now', 'Later', 'Dismiss', 'Close']);
+        const buttons = await dialog.getButtons().catch(() => []);
+        for (const button of buttons) {
+            const label = await button.getText().catch(() => '');
+            if (dismissButtonTitles.has(label)) {
+                await button.click();
+                closeAttempted = true;
+                break;
+            }
+        }
+    }
+
+    if (!closeAttempted) {
+        throw new Error('Unexpected modal dialog without a close or dismiss action');
+    }
+
+    await driver.wait(async () => {
+        return (await driver.findElements(By.className('monaco-dialog-box'))).length === 0;
+    }, 10000, 'Modal dialog did not close');
+}
+
+export async function closeExtensionsViewAndEditors(driver: WebDriver): Promise<void> {
+    await dismissModalDialogIfPresent(driver);
+
+    const extensionsView = await new ActivityBar().getViewControl('Extensions').catch(() => undefined);
+    if (extensionsView) {
+        await extensionsView.closeView().catch(err => {
+            if (!isExpectedUiInteractionError(err) && !(err instanceof error.StaleElementReferenceError)) {
+                throw err;
+            }
+        });
+    }
+
+    await dismissModalDialogIfPresent(driver);
+
+    try {
+        await new EditorView().closeAllEditors();
+    } catch (err) {
+        if (err instanceof error.ElementClickInterceptedError) {
+            await dismissModalDialogIfPresent(driver);
+            await new EditorView().closeAllEditors();
+            return;
+        }
+        if (isExpectedUiAbsenceError(err)) {
+            return;
+        }
+        throw err;
+    }
+}
+
+function getExtensionsFolder(): string {
+    const extensionsFolder = process.env.EXTENSIONS_FOLDER;
+    if (extensionsFolder === undefined) {
+        throw new Error('EXTENSIONS_FOLDER environment variable is not set');
+    }
+    return extensionsFolder;
+}
+
+export function isExtensionInstalled(extensionId: string): boolean {
+    return fs.readdirSync(getExtensionsFolder()).some(entry => entry === extensionId || entry.startsWith(`${extensionId}-`));
+}
+
+export function getInstalledExtensionPath(extensionId: string): string {
+    const installedExtension = fs.readdirSync(getExtensionsFolder()).find(entry => entry === extensionId || entry.startsWith(`${extensionId}-`));
+    if (installedExtension === undefined) {
+        throw new Error(`Extension '${extensionId}' is not installed`);
+    }
+    return path.join(getExtensionsFolder(), installedExtension);
+}
+
+export function getInstalledExtensionMetadata(extensionId: string): { [key: string]: any } {
+    return JSON.parse(fs.readFileSync(path.join(getInstalledExtensionPath(extensionId), 'package.json'), {
+        encoding: 'utf-8'
+    }));
+}
+
+export function getExtensionPackMetadata(): { [key: string]: any } {
+    return JSON.parse(fs.readFileSync('package.json', {
+        encoding: 'utf-8'
+    }));
+}
 
 /**
  * Open the extension page.
@@ -26,14 +202,31 @@ import { DEBUGGER_ATTACHED_MESSAGE } from './variables';
  * @param timeout Timeout in ms.
  * @returns Marketplace and ExtensionViewItem object tied with the extension.
  */
-export async function openExtensionPage(driver: WebDriver, name: string, timeout: number): Promise<ExtensionsViewItem> {
-    let item: ExtensionsViewItem;
+export async function openExtensionPage(driver: WebDriver, name: string | string[], timeout: number): Promise<ExtensionsViewItem> {
+    const searchTerms = Array.isArray(name) ? name : [name];
+    const preferredSearchTerms = getPreferredExtensionSearchTerms(name);
+    let item: ExtensionsViewItem | undefined;
     await driver.wait(async () => {
         try {
+            await dismissModalDialogIfPresent(driver);
             const extensionsView = await (await new ActivityBar().getViewControl('Extensions'))?.openView();
-            const marketplace = (await extensionsView?.getContent().getSection('Installed')) as ExtensionsViewSection;
-            item = await marketplace.findItem(`@installed ${name}`) as ExtensionsViewItem;
-            return true;
+            const content = extensionsView?.getContent();
+            if (!content) {
+                return false;
+            }
+
+            const installedSection = await getExtensionsSection(content, 'Installed');
+            const enabledSection = await getExtensionsSection(content, 'Enabled');
+            const sections = [installedSection, enabledSection].filter((section): section is ExtensionsViewSection => section !== undefined);
+            item = await findMatchingExtensionItemInSections(sections, searchTerms);
+            if (!item) {
+                item = await findMatchingExtensionItemBySearch(installedSection, '@installed', preferredSearchTerms);
+            }
+            if (!item && !installedSection) {
+                item = await findMatchingExtensionItemBySearch(enabledSection, '@enabled', preferredSearchTerms);
+            }
+
+            return item !== undefined;
         } catch (e) {
             if (e instanceof error.StaleElementReferenceError) {
                 return {
@@ -41,9 +234,44 @@ export async function openExtensionPage(driver: WebDriver, name: string, timeout
                     value: undefined
                 };
             }
+            return false;
         }
-    }, timeout, 'Page was not rendered');
+    }, timeout, `Extension '${searchTerms[0]}' was not rendered`);
     return item!;
+}
+
+export async function waitUntilExtensionsViewIsReady(driver: WebDriver, timeout = 60000, interval = 1000): Promise<void> {
+    await VSBrowser.instance.waitForWorkbench(Math.min(timeout, 30000));
+
+    let stableChecks = 0;
+    await driver.wait(async () => {
+        try {
+            const extensionsView = await (await new ActivityBar().getViewControl('Extensions'))?.openView();
+            const content = extensionsView?.getContent();
+            if (!content) {
+                stableChecks = 0;
+                return false;
+            }
+
+            const installedSection = await content.getSection('Installed', ExtensionsViewSection).catch(() => undefined);
+            const enabledSection = await content.getSection('Enabled', ExtensionsViewSection).catch(() => undefined);
+            const hasRelevantSection = installedSection !== undefined || enabledSection !== undefined;
+            const hasViewProgress = await content.hasProgress().catch(() => false);
+            const isStable = hasRelevantSection && !hasViewProgress;
+            stableChecks = isStable ? stableChecks + 1 : 0;
+            return stableChecks >= 3;
+        } catch (e) {
+            if (e instanceof error.StaleElementReferenceError) {
+                stableChecks = 0;
+                return {
+                    delay: interval,
+                    value: undefined
+                };
+            }
+            stableChecks = 0;
+            return false;
+        }
+    }, timeout, 'Extensions view did not finish loading', interval);
 }
 
 /**
@@ -90,7 +318,7 @@ export async function executeCommand(command: string): Promise<void> {
  */
 export async function waitUntilEditorIsOpened(driver: WebDriver, title: string, timeout = 10000): Promise<void> {
 	await driver.wait(async function () {
-		return (await new EditorView().getOpenEditorTitles()).find(t => t === title);
+		return (await new EditorView().getOpenEditorTitles()).find(t => t === title || t.includes(title));
 	}, timeout);
 }
 
@@ -178,9 +406,17 @@ export async function moveDebugBar(time: number = 60_000): Promise<void> {
  * @param driver The WebDriver instance to use.
  */
 export async function disconnectDebugger(driver: WebDriver, interval = 500): Promise<void> {
+    let debugBar: DebugToolbar;
+    try {
+        debugBar = await DebugToolbar.create(2000);
+    } catch (err) {
+        if (isExpectedUiAbsenceError(err)) {
+            return;
+        }
+        throw err;
+    }
     await driver.wait(async function () {
         try {
-            const debugBar = await DebugToolbar.create();
             await debugBar.disconnect();
             await driver.wait(until.elementIsNotVisible(debugBar), 10000);
             return true;
@@ -197,7 +433,14 @@ export async function disconnectDebugger(driver: WebDriver, interval = 500): Pro
  * Click on button to kill running process in Terminal View.
  */
 export async function killTerminal(): Promise<void> {
-   await (await new BottomBarPanel().openTerminalView()).killTerminal();
+    try {
+        await (await new BottomBarPanel().openTerminalView()).killTerminal();
+    } catch (err) {
+        if (isExpectedUiAbsenceError(err)) {
+            return;
+        }
+        throw err;
+    }
 }
 
 /**
@@ -232,4 +475,8 @@ export function addNewItemToRawJson(jsonStr: string, key: string, values: string
 export async function clearTerminal(): Promise<void> {
     await new BottomBarPanel().openTerminalView()
     await new Workbench().executeCommand('terminal: clear');
+}
+
+export function normalizeDisplayedExtensionTitle(title: string): string {
+    return normalizeExtensionTitle(title);
 }

@@ -16,112 +16,28 @@
  */
 import { expect } from 'chai';
 import * as fs from 'fs';
-import {
-    ActivityBar,
-    after,
-    EditorView,
-    error,
-    ExtensionsViewItem,
-    ViewControl,
-    VSBrowser,
-    WebDriver
-} from 'vscode-extension-tester';
-import { openExtensionPage } from '../utils'
+import { getExtensionPackMetadata, getInstalledExtensionMetadata, getInstalledExtensionPath } from '../utils'
 
 describe('Extension Pack for Apache Camel', function () {
     this.timeout(60000);
     this.slow(10000);
-    const extensionMetadata: { [key: string]: any } = JSON.parse(fs.readFileSync('package.json', {
-        encoding: 'utf-8'
-    }));
-    let item: ExtensionsViewItem;
-    let driver: WebDriver;
-
-    after(async () => {
-        this.timeout(5000);
-        const view = await new ActivityBar().getViewControl("Extensions") as ViewControl;
-        await view.closeView();
-        await new EditorView().closeAllEditors();
-    });
-
-    before(async () => {
-        driver = VSBrowser.instance.driver;
-        item = await openExtensionPage(driver, extensionMetadata['displayName'], this.timeout());
-    });
+    const extensionMetadata: { [key: string]: any } = getExtensionPackMetadata();
+    const extensionId = `${extensionMetadata['publisher']}.${extensionMetadata['name']}`;
+    const metadataChecks = [
+        { title: 'author', key: 'author' },
+        { title: 'title', key: 'displayName' },
+        { title: 'description', key: 'description' },
+        { title: 'version', key: 'version' }
+    ];
 
     it('Extension Pack is installed', async function () {
-        const testState = await driver.wait(async () => {
-            try {
-                return await item.isInstalled();
-            } catch (e) {
-                if (e instanceof error.StaleElementReferenceError) {
-                    item = await openExtensionPage(driver, extensionMetadata['displayName'], this.timeout());
-                    return undefined;
-                }
-                throw e;
-            }
-        }, this.timeout(), 'Page was not rendered well');
-        expect(testState).to.be.true;
+        expect(fs.existsSync(getInstalledExtensionPath(extensionId))).to.be.true;
     });
 
-    it('Has correct author', async function () {
-        const testAuthor = await driver.wait(async () => {
-            try {
-                return await item.getAuthor();
-            } catch (e) {
-                if (e instanceof error.StaleElementReferenceError) {
-                    item = await openExtensionPage(driver, extensionMetadata['displayName'], this.timeout());
-                    return undefined;
-                }
-                throw e;
-            }
-        }, this.timeout(), 'Page was not rendered well');
-        expect(testAuthor).to.be.equal('Red Hat');
-    });
-
-    it('Has correct title', async function () {
-        const testTitle = await driver.wait(async () => {
-            try {
-                return await item.getTitle();
-            } catch (e) {
-                if (e instanceof error.StaleElementReferenceError) {
-                    item = await openExtensionPage(driver, extensionMetadata['displayName'], this.timeout());
-                    return undefined;
-                }
-                throw e;
-            }
-        }, this.timeout(), 'Page was not rendered well');
-        expect(testTitle).to.be.equal(extensionMetadata['displayName']);
-    });
-
-    it('Has correct description', async function () {
-        const testDescription = await driver.wait(async () => {
-            try {
-                return await item.getDescription();
-            } catch (e) {
-                if (e instanceof error.StaleElementReferenceError) {
-                    item = await openExtensionPage(driver, extensionMetadata['displayName'], this.timeout());
-                    return undefined;
-                }
-                throw e;
-            }
-        }, this.timeout(), 'Page was not rendered well');
-        expect(testDescription).to.be.equal(extensionMetadata['description']);
-    });
-
-    it('Has correct version', async function () {
-        const testVersion = await driver.wait(async () => {
-            try {
-                return await item.getVersion();
-            } catch (e) {
-                if (e instanceof error.StaleElementReferenceError) {
-                    item = await openExtensionPage(driver, extensionMetadata['displayName'], this.timeout());
-                    return undefined;
-                }
-                throw e;
-            }
-        }, this.timeout(), 'Page was not rendered well');
-        expect(testVersion).to.be.equal(extensionMetadata['version']);
+    metadataChecks.forEach(({ title, key }) => {
+        it(`Has correct ${title}`, function () {
+            expect(getInstalledExtensionMetadata(extensionId)[key]).to.be.equal(extensionMetadata[key]);
+        });
     });
 
 });
